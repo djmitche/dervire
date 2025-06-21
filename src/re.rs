@@ -163,6 +163,7 @@ impl Re {
     }
 }
 
+// Derivatives
 impl Re {
     // TODO: test
     pub fn deriv(self: &Rc<Self>, c: char) -> Rc<Re> {
@@ -200,6 +201,50 @@ impl Re {
     }
 }
 
+// Canonicalization
+impl Re {
+    /// Partially canonicalize this regular expression. Per the paper, this means that any given
+    /// regular expression has a finite number of representations under this canonicalization,
+    /// which is enough to conservatively group equivalent regular expressions.
+    pub fn canonicalize(self: &Rc<Self>) -> Rc<Self> {
+        match self.as_ref() {
+            Re::Or(lhs, rhs) => {
+                let (mut lhs, mut rhs) = (lhs.canonicalize(), rhs.canonicalize());
+                // Resolve to left-associative.
+                if let Re::Or(rlhs, rrhs) = rhs.as_ref() {
+                    lhs = Re::or(lhs.clone(), rlhs.clone()).canonicalize();
+                    rhs = rrhs.clone();
+                } else
+                // If branches are the same, no need for `Or`.
+                if rhs == lhs {
+                    return lhs.clone();
+                } else if lhs.is_or() {
+                    return Re::or(lhs, rhs);
+                } else
+                // Otherwise resolve in order.
+                if rhs < lhs {
+                    (rhs, lhs) = (lhs, rhs);
+                }
+                Re::or(lhs, rhs)
+            }
+            Re::Neg(re) => {
+                // Resolve !!r -> r.
+                let re = re.canonicalize();
+                if let Re::Neg(inner) = re.as_ref() {
+                    inner.clone()
+                } else {
+                    Re::neg(re)
+                }
+            }
+            Re::Concat(lhs, rhs) => Re::concat(lhs.canonicalize(), rhs.canonicalize()),
+            Re::Kleene(re) => Re::kleene(re.canonicalize()),
+            Re::And(lhs, rhs) => Re::and(lhs.canonicalize(), rhs.canonicalize()),
+            _ => self.clone(),
+        }
+    }
+}
+
+// Matching
 impl Re {
     /// Determine whether the given input matches the regular expression; that is, whether
     /// it is in the language defined by the expression.
@@ -360,4 +405,37 @@ mod test {
     match_test!(match_neg_less("x!(abc)y", "xaby"), true);
     match_test!(match_neg_more("x!(abc)y", "xabcdy"), true);
     match_test!(match_neg_false("x!(abc)y", "xabcy"), false);
+
+    // Canonicalization
+
+    macro_rules! canon_test {
+        ( $name:ident ( $re:expr, $canonical:expr ) ) => {
+            #[test]
+            fn $name() {
+                assert_eq!($re.canonicalize(), $canonical);
+                assert_eq!($canonical.canonicalize(), $canonical);
+            }
+        };
+    }
+
+    canon_test!(collapse_or(
+        Re::or(Re::char('a'), Re::char('a')),
+        Re::char('a')
+    ));
+
+    canon_test!(left_assoc_or(
+        Re::neg(Re::or(Re::char('a'), Re::or(Re::char('b'), Re::char('c')))),
+        Re::neg(Re::or(Re::or(Re::char('a'), Re::char('b')), Re::char('c')))
+    ));
+
+    canon_test!(left_assoc_or_multi(
+        Re::neg(Re::or(
+            Re::char('a'),
+            Re::or(Re::char('b'), Re::or(Re::char('c'), Re::char('d')))
+        )),
+        Re::neg(Re::or(
+            Re::or(Re::or(Re::char('a'), Re::char('b')), Re::char('c')),
+            Re::char('d')
+        ))
+    ));
 }
