@@ -8,7 +8,7 @@ use nom::{
 };
 use std::{cell::OnceCell, rc::Rc};
 
-#[derive(Eq, PartialEq, PartialOrd, Debug, Clone)]
+#[derive(Eq, PartialEq, PartialOrd, Debug, Clone, Hash)]
 pub enum Re {
     /// Recognizes nothing.
     Null,
@@ -165,39 +165,39 @@ impl Re {
 
 // Derivatives
 impl Re {
-    // TODO: test
     pub fn deriv(self: &Rc<Self>, c: char) -> Rc<Re> {
         match self.as_ref() {
             Re::Null => Rc::clone(self),
             Re::Empty => Re::null(),
             Re::Char(c2) if c == *c2 => Re::empty(),
             Re::Char(c2) => Re::null(),
-            Re::Concat(lhs, rhs) => {
-                if lhs.is_nullable() {
-                    Re::or(lhs.deriv(c), rhs.deriv(c))
-                } else {
-                    lhs.deriv(c)
-                }
-            }
-            Re::Kleene(re) => Re::concat(re.deriv(c), re.clone()),
+            Re::Concat(lhs, rhs) => Re::or(
+                Re::concat(lhs.deriv(c), rhs.clone()),
+                Re::concat(lhs.v(), rhs.deriv(c)),
+            ),
+            Re::Kleene(re) => Re::concat(re.deriv(c), self.clone()),
             Re::Or(lhs, rhs) => Re::or(lhs.deriv(c), rhs.deriv(c)),
             Re::And(lhs, rhs) => Re::and(lhs.deriv(c), rhs.deriv(c)),
             Re::Neg(re) => Re::neg(re.deriv(c)),
         }
     }
 
-    // TODO: test
-    fn is_nullable(&self) -> bool {
+    fn v(&self) -> Rc<Re> {
         match self {
-            Re::Null => false,
-            Re::Empty => true,
-            Re::Char(_) => false,
-            Re::Concat(lhs, rhs) => lhs.is_nullable() && rhs.is_nullable(),
-            Re::Kleene(_) => true,
-            Re::Or(lhs, rhs) => lhs.is_nullable() || rhs.is_nullable(),
-            Re::And(lhs, rhs) => lhs.is_nullable() && rhs.is_nullable(),
-            Re::Neg(re) => !re.is_nullable(),
+            Re::Null => Re::empty(),
+            Re::Empty => Re::null(),
+            Re::Char(_) => Re::null(),
+            Re::Concat(lhs, rhs) => Re::and(lhs.v(), rhs.v()),
+            Re::Kleene(_) => Re::empty(),
+            Re::Or(lhs, rhs) => Re::or(lhs.v(), rhs.v()),
+            Re::And(lhs, rhs) => Re::and(lhs.v(), rhs.v()),
+            Re::Neg(re) => match re.v().as_ref() {
+                Re::Null => Re::empty(),
+                Re::Empty => Re::null(),
+                _ => unreachable!(),
+            },
         }
+        .canonicalize()
     }
 }
 
@@ -210,22 +210,43 @@ impl Re {
         match self.as_ref() {
             Re::Or(lhs, rhs) => {
                 let (mut lhs, mut rhs) = (lhs.canonicalize(), rhs.canonicalize());
-                // Resolve to left-associative.
-                if let Re::Or(rlhs, rrhs) = rhs.as_ref() {
-                    lhs = Re::or(lhs.clone(), rlhs.clone()).canonicalize();
-                    rhs = rrhs.clone();
-                } else
-                // If branches are the same, no need for `Or`.
-                if rhs == lhs {
-                    return lhs.clone();
-                } else if lhs.is_or() {
-                    return Re::or(lhs, rhs);
-                } else
-                // Otherwise resolve in order.
-                if rhs < lhs {
-                    (rhs, lhs) = (lhs, rhs);
+                match (lhs.as_ref(), rhs.as_ref()) {
+                    (Re::Null, _) => rhs,
+                    (_, Re::Null) => lhs,
+                    // Remove duplicates
+                    (_, _) if lhs == rhs => lhs,
+                    // Resolve to left-associative.
+                    (_, Re::Or(rlhs, rrhs)) => {
+                        lhs = Re::or(lhs.clone(), rlhs.clone()).canonicalize();
+                        rhs = rrhs.clone();
+                        Re::or(lhs, rhs)
+                    }
+                    // If already left-associative, leave it
+                    (Re::Or(_, _), _) => Re::or(lhs, rhs),
+                    // Return in sorted order
+                    (_, _) if lhs > rhs => Re::or(rhs, lhs),
+                    (_, _) => Re::or(lhs, rhs),
                 }
-                Re::or(lhs, rhs)
+            }
+            Re::And(lhs, rhs) => {
+                let (mut lhs, mut rhs) = (lhs.canonicalize(), rhs.canonicalize());
+                match (lhs.as_ref(), rhs.as_ref()) {
+                    (Re::Null, _) => Re::null(),
+                    (_, Re::Null) => Re::null(),
+                    // Remove duplicates
+                    (_, _) if lhs == rhs => lhs,
+                    // Resolve to left-associative.
+                    (_, Re::And(rlhs, rrhs)) => {
+                        lhs = Re::and(lhs.clone(), rlhs.clone()).canonicalize();
+                        rhs = rrhs.clone();
+                        Re::and(lhs, rhs)
+                    }
+                    // If already left-associative, leave it
+                    (Re::And(_, _), _) => Re::and(lhs, rhs),
+                    // Return in sorted order
+                    (_, _) if lhs > rhs => Re::and(rhs, lhs),
+                    (_, _) => Re::and(lhs, rhs),
+                }
             }
             Re::Neg(re) => {
                 // Resolve !!r -> r.
@@ -236,9 +257,23 @@ impl Re {
                     Re::neg(re)
                 }
             }
-            Re::Concat(lhs, rhs) => Re::concat(lhs.canonicalize(), rhs.canonicalize()),
+            Re::Concat(lhs, rhs) => {
+                let (mut lhs, mut rhs) = (lhs.canonicalize(), rhs.canonicalize());
+                match (lhs.as_ref(), rhs.as_ref()) {
+                    (Re::Null, _) => Re::null(),
+                    (_, Re::Null) => Re::null(),
+                    (Re::Empty, _) => rhs,
+                    (_, Re::Empty) => lhs,
+                    // Resolve to left-associative.
+                    (_, Re::Concat(rlhs, rrhs)) => {
+                        lhs = Re::concat(lhs.clone(), rlhs.clone()).canonicalize();
+                        rhs = rrhs.clone();
+                        Re::concat(lhs, rhs)
+                    }
+                    (_, _) => Re::concat(lhs, rhs),
+                }
+            }
             Re::Kleene(re) => Re::kleene(re.canonicalize()),
-            Re::And(lhs, rhs) => Re::and(lhs.canonicalize(), rhs.canonicalize()),
             _ => self.clone(),
         }
     }
@@ -248,7 +283,7 @@ impl Re {
 impl Re {
     /// Determine whether the given input matches the regular expression; that is, whether
     /// it is in the language defined by the expression.
-    pub fn match_slow(&self, input: impl AsRef<str>) -> bool {
+    pub fn matches_slow(&self, input: impl AsRef<str>) -> bool {
         self.match_inner(input.as_ref())
     }
 
@@ -368,13 +403,236 @@ mod test {
         ))
     );
 
+    // Derivatives
+
+    macro_rules! deriv_test {
+        ( $name:ident ( $input:expr, $char:expr ), $output:expr ) => {
+            #[test]
+            fn $name() {
+                assert_eq!($input.deriv($char).canonicalize(), $output);
+            }
+        };
+    }
+
+    deriv_test!(deriv_null(Re::null(), 'a'), Re::null());
+    deriv_test!(deriv_empty(Re::empty(), 'a'), Re::null());
+    deriv_test!(deriv_matching_char(Re::char('a'), 'a'), Re::empty());
+    deriv_test!(deriv_nonmatching_char(Re::char('a'), 'x'), Re::null());
+    deriv_test!(
+        deriv_concat(Re::concat(Re::char('a'), Re::char('b')), 'a'),
+        Re::char('b')
+    );
+    deriv_test!(
+        deriv_concat_nonmatching(Re::concat(Re::char('a'), Re::char('b')), 'x'),
+        Re::null()
+    );
+    deriv_test!(
+        deriv_concat_nullable(Re::concat(Re::kleene(Re::char('a')), Re::char('b')), 'a'),
+        Re::concat(Re::kleene(Re::char('a')), Re::char('b'))
+    );
+    deriv_test!(
+        deriv_matching_kleene(Re::kleene(Re::char('a')), 'a'),
+        Re::kleene(Re::char('a'))
+    );
+    deriv_test!(
+        deriv_nonmatching_kleene(Re::kleene(Re::char('a')), 'x'),
+        Re::null()
+    );
+    deriv_test!(
+        deriv_or_both_match(
+            Re::or(
+                Re::concat(Re::char('a'), Re::char('b')),
+                Re::concat(Re::char('a'), Re::char('c'))
+            ),
+            'a'
+        ),
+        Re::or(Re::char('b'), Re::char('c'))
+    );
+    deriv_test!(
+        deriv_or_one_matches(
+            Re::or(
+                Re::concat(Re::char('a'), Re::char('b')),
+                Re::concat(Re::char('c'), Re::char('d'))
+            ),
+            'a'
+        ),
+        Re::char('b')
+    );
+    deriv_test!(
+        deriv_and_both_match(
+            Re::and(
+                Re::concat(Re::char('a'), Re::char('b')),
+                Re::concat(Re::char('a'), Re::char('c'))
+            ),
+            'a'
+        ),
+        Re::and(Re::char('b'), Re::char('c'))
+    );
+    deriv_test!(
+        deriv_and_one_matches(
+            Re::and(
+                Re::concat(Re::char('a'), Re::char('b')),
+                Re::concat(Re::char('c'), Re::char('d'))
+            ),
+            'a'
+        ),
+        Re::null()
+    );
+
+    // Canonicalization
+
+    macro_rules! canon_test {
+        ( $name:ident ( $re:expr, $canonical:expr ) ) => {
+            #[test]
+            fn $name() {
+                assert_eq!($re.canonicalize(), $canonical);
+                assert_eq!($canonical.canonicalize(), $canonical);
+            }
+        };
+    }
+
+    canon_test!(canon_or_collapse_equal(
+        Re::or(Re::char('a'), Re::char('a')),
+        Re::char('a')
+    ));
+
+    canon_test!(canon_or_sorted(
+        Re::or(Re::char('b'), Re::char('a')),
+        Re::or(Re::char('a'), Re::char('b'))
+    ));
+
+    canon_test!(canon_or_collapse_null_lhs(
+        Re::or(Re::null(), Re::char('a')),
+        Re::char('a')
+    ));
+
+    canon_test!(canon_or_collapse_null_rhs(
+        Re::or(Re::char('a'), Re::null()),
+        Re::char('a')
+    ));
+
+    canon_test!(canon_or_left_assoc(
+        Re::neg(Re::or(Re::char('a'), Re::or(Re::char('b'), Re::char('c')))),
+        Re::neg(Re::or(Re::or(Re::char('a'), Re::char('b')), Re::char('c')))
+    ));
+
+    canon_test!(canon_or_left_assoc_multi(
+        Re::neg(Re::or(
+            Re::char('a'),
+            Re::or(Re::char('b'), Re::or(Re::char('c'), Re::char('d')))
+        )),
+        Re::neg(Re::or(
+            Re::or(Re::or(Re::char('a'), Re::char('b')), Re::char('c')),
+            Re::char('d')
+        ))
+    ));
+
+    canon_test!(canon_and_collapse_equal(
+        Re::and(Re::char('a'), Re::char('a')),
+        Re::char('a')
+    ));
+
+    canon_test!(canon_and_sorted(
+        Re::and(Re::char('b'), Re::char('a')),
+        Re::and(Re::char('a'), Re::char('b'))
+    ));
+
+    canon_test!(canon_and_collapse_null_lhs(
+        Re::and(Re::null(), Re::char('a')),
+        Re::null()
+    ));
+
+    canon_test!(canon_and_collapse_null_rhs(
+        Re::and(Re::char('a'), Re::null()),
+        Re::null()
+    ));
+
+    canon_test!(canon_and_left_assoc(
+        Re::neg(Re::and(
+            Re::char('a'),
+            Re::and(Re::char('b'), Re::char('c'))
+        )),
+        Re::neg(Re::and(
+            Re::and(Re::char('a'), Re::char('b')),
+            Re::char('c')
+        ))
+    ));
+
+    canon_test!(canon_and_left_assoc_multi(
+        Re::neg(Re::and(
+            Re::char('a'),
+            Re::and(Re::char('b'), Re::and(Re::char('c'), Re::char('d')))
+        )),
+        Re::neg(Re::and(
+            Re::and(Re::and(Re::char('a'), Re::char('b')), Re::char('c')),
+            Re::char('d')
+        ))
+    ));
+
+    canon_test!(canon_concat_no_collapse_equal(
+        Re::concat(Re::char('a'), Re::char('a')),
+        Re::concat(Re::char('a'), Re::char('a'))
+    ));
+
+    canon_test!(canon_concat_not_sorted(
+        Re::concat(Re::char('b'), Re::char('a')),
+        Re::concat(Re::char('b'), Re::char('a'))
+    ));
+
+    canon_test!(canon_concat_collapse_null_lhs(
+        Re::concat(Re::null(), Re::char('a')),
+        Re::null()
+    ));
+
+    canon_test!(canon_concat_collapse_empty_lhs(
+        Re::concat(Re::empty(), Re::char('a')),
+        Re::char('a')
+    ));
+
+    canon_test!(canon_concat_collapse_null_rhs(
+        Re::concat(Re::char('a'), Re::null()),
+        Re::null()
+    ));
+
+    canon_test!(canon_concat_collapse_empty_rhs(
+        Re::concat(Re::char('a'), Re::empty()),
+        Re::char('a')
+    ));
+
+    canon_test!(canon_concat_left_assoc(
+        Re::neg(Re::concat(
+            Re::char('a'),
+            Re::concat(Re::char('b'), Re::char('c'))
+        )),
+        Re::neg(Re::concat(
+            Re::concat(Re::char('a'), Re::char('b')),
+            Re::char('c')
+        ))
+    ));
+
+    canon_test!(canon_concat_left_assoc_multi(
+        Re::neg(Re::concat(
+            Re::char('a'),
+            Re::concat(Re::char('b'), Re::concat(Re::char('c'), Re::char('d')))
+        )),
+        Re::neg(Re::concat(
+            Re::concat(Re::concat(Re::char('a'), Re::char('b')), Re::char('c')),
+            Re::char('d')
+        ))
+    ));
+
+    canon_test!(canon_neg_double(
+        Re::neg(Re::neg(Re::char('a'))),
+        Re::char('a')
+    ));
+
     // Matching
 
     macro_rules! match_test {
         ( $name:ident ( $re:expr, $input:expr ), $matches:ident ) => {
             #[test]
             fn $name() {
-                assert_eq!(dbg!(Re::parse($re)).match_slow($input), $matches);
+                assert_eq!(dbg!(Re::parse($re)).matches_slow($input), $matches);
             }
         };
     }
@@ -405,37 +663,4 @@ mod test {
     match_test!(match_neg_less("x!(abc)y", "xaby"), true);
     match_test!(match_neg_more("x!(abc)y", "xabcdy"), true);
     match_test!(match_neg_false("x!(abc)y", "xabcy"), false);
-
-    // Canonicalization
-
-    macro_rules! canon_test {
-        ( $name:ident ( $re:expr, $canonical:expr ) ) => {
-            #[test]
-            fn $name() {
-                assert_eq!($re.canonicalize(), $canonical);
-                assert_eq!($canonical.canonicalize(), $canonical);
-            }
-        };
-    }
-
-    canon_test!(collapse_or(
-        Re::or(Re::char('a'), Re::char('a')),
-        Re::char('a')
-    ));
-
-    canon_test!(left_assoc_or(
-        Re::neg(Re::or(Re::char('a'), Re::or(Re::char('b'), Re::char('c')))),
-        Re::neg(Re::or(Re::or(Re::char('a'), Re::char('b')), Re::char('c')))
-    ));
-
-    canon_test!(left_assoc_or_multi(
-        Re::neg(Re::or(
-            Re::char('a'),
-            Re::or(Re::char('b'), Re::or(Re::char('c'), Re::char('d')))
-        )),
-        Re::neg(Re::or(
-            Re::or(Re::or(Re::char('a'), Re::char('b')), Re::char('c')),
-            Re::char('d')
-        ))
-    ));
 }
