@@ -50,6 +50,7 @@ impl Re {
     pub fn and(lhs: Rc<Self>, rhs: Rc<Self>) -> Rc<Self> {
         Rc::new(Re::And(lhs, rhs))
     }
+    #[allow(clippy::should_implement_trait)]
     pub fn neg(re: Rc<Self>) -> Rc<Self> {
         Rc::new(Re::Neg(re))
     }
@@ -94,7 +95,6 @@ impl Re {
     }
 
     fn parse_concat(input: &str) -> IResult<&str, Rc<Self>> {
-        println!("parse_concat({input:?})");
         fold_many0(Self::parse_neg, Re::empty, |res, subre| {
             if res.is_empty() {
                 subre
@@ -106,7 +106,6 @@ impl Re {
     }
 
     fn parse_neg(input: &str) -> IResult<&str, Rc<Self>> {
-        println!("parse_neg({input:?})");
         alt((
             preceded(tag("!"), Self::parse_neg).map(Re::neg),
             Self::parse_kleene,
@@ -115,7 +114,6 @@ impl Re {
     }
 
     fn parse_kleene(input: &str) -> IResult<&str, Rc<Self>> {
-        println!("parse_kleene({input:?})");
         pair(Self::parse_or, many0_count(tag("*")))
             .map(|(mut res, num_stars)| {
                 for _ in 0..num_stars {
@@ -127,7 +125,6 @@ impl Re {
     }
 
     fn parse_or(input: &str) -> IResult<&str, Rc<Self>> {
-        println!("parse_or({input:?})");
         let (input, res) = Self::parse_and(input)?;
         fold_many0(
             preceded(tag("+"), Self::parse_and),
@@ -138,7 +135,6 @@ impl Re {
     }
 
     fn parse_and(input: &str) -> IResult<&str, Rc<Self>> {
-        println!("parse_and({input:?})");
         let (input, res) = Self::parse_parens(input)?;
         fold_many0(
             preceded(tag("&"), Self::parse_parens),
@@ -149,7 +145,6 @@ impl Re {
     }
 
     fn parse_parens(input: &str) -> IResult<&str, Rc<Self>> {
-        println!("parse_parens({input:?})");
         alt((
             delimited(tag("("), Self::parse_concat, tag(")")),
             Self::parse_literal,
@@ -158,7 +153,6 @@ impl Re {
     }
 
     fn parse_literal(input: &str) -> IResult<&str, Rc<Self>> {
-        println!("parse_literal({input:?})");
         none_of("&+*()!").map(Re::char).parse(input)
     }
 }
@@ -182,11 +176,17 @@ impl Re {
         }
     }
 
+    /// Returns true if this regular expression matches the empty string.
+    pub fn is_nullable(self: &Rc<Self>) -> bool {
+        self.v().is_empty()
+    }
+
+    // Defined in section 3.1.
     fn v(&self) -> Rc<Re> {
         match self {
-            Re::Null => Re::empty(),
-            Re::Empty => Re::null(),
+            Re::Empty => Re::empty(),
             Re::Char(_) => Re::null(),
+            Re::Null => Re::null(),
             Re::Concat(lhs, rhs) => Re::and(lhs.v(), rhs.v()),
             Re::Kleene(_) => Re::empty(),
             Re::Or(lhs, rhs) => Re::or(lhs.v(), rhs.v()),
@@ -628,39 +628,8 @@ mod test {
 
     // Matching
 
-    macro_rules! match_test {
-        ( $name:ident ( $re:expr, $input:expr ), $matches:ident ) => {
-            #[test]
-            fn $name() {
-                assert_eq!(dbg!(Re::parse($re)).matches_slow($input), $matches);
-            }
-        };
+    fn match_test(re: &str, input: &str) -> bool {
+        dbg!(Re::parse(re)).matches_slow(input)
     }
-
-    match_test!(match_empty("", ""), true);
-    match_test!(match_nonempty("", "abc"), false);
-    match_test!(match_char("a", "a"), true);
-    match_test!(match_char_different("x", "a"), false);
-    match_test!(match_char_empty("a", ""), false);
-    match_test!(match_concat("ab", "ab"), true);
-    match_test!(match_concat_extra("ab", "abc"), false);
-    match_test!(match_concat_short("abc", "ab"), false);
-    match_test!(match_concat_different("xyz", "abc"), false);
-    match_test!(match_concat_suffix("abc", "xabc"), false);
-    match_test!(match_kleene_none("a*", ""), true);
-    match_test!(match_kleene_one("a*", "a"), true);
-    match_test!(match_kleene_two("a*", "aa"), true);
-    match_test!(match_double_kleene_zero("a*b*", "bbbb"), true);
-    match_test!(match_double_kleene_one("a*b*", "abbb"), true);
-    match_test!(match_double_kleene_two("a*b*", "aabb"), true);
-    match_test!(match_double_kleene_three("a*b*", "aaab"), true);
-    match_test!(match_double_kleene_four("a*b*", "aaaa"), true);
-    match_test!(match_kleene_alternation("(ab)*", "ababab"), true);
-    match_test!(match_kleene_alternation_short("(ab)*", "ababa"), false);
-    match_test!(match_optional("x((abc)+())y", "xabcy"), true);
-    match_test!(match_optional_missing("x((abc)+())y", "xy"), true);
-    match_test!(match_neg("x!(abc)y", "xy"), true);
-    match_test!(match_neg_less("x!(abc)y", "xaby"), true);
-    match_test!(match_neg_more("x!(abc)y", "xabcdy"), true);
-    match_test!(match_neg_false("x!(abc)y", "xabcy"), false);
+    crate::test_macros::match_tests!(match_test);
 }
