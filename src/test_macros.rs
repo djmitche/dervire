@@ -36,6 +36,7 @@ macro_rules! match_tests {
             t!($t, double_kleene_four("a*b*", "aaaa"), true);
             t!($t, kleene_alternation("(ab)*", "ababab"), true);
             t!($t, kleene_alternation_short("(ab)*", "ababa"), false);
+            t!($t, kleene_alternation_multi_matches("(a*b*)*", "abaaababbb"), true);
             t!($t, optional("x((abc)+())y", "xabcy"), true);
             t!($t, optional_missing("x((abc)+())y", "xy"), true);
             t!($t, neg("x!(abc)y", "xy"), true);
