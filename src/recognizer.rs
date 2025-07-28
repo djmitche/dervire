@@ -100,5 +100,57 @@ mod test {
         let recog = dbg!(Recognizer::new(Re::parse(re)));
         recog.matches(input)
     }
-    crate::test_macros::match_tests!(match_test);
+
+    // Custom match tests for standard regex syntax
+    #[test]
+    fn test_empty_match() {
+        assert!(match_test("", ""));
+        assert!(!match_test("", "abc"));
+    }
+
+    #[test]
+    fn test_char_match() {
+        assert!(match_test("a", "a"));
+        assert!(!match_test("x", "a"));
+        assert!(!match_test("a", ""));
+    }
+
+    #[test]
+    fn test_concat_match() {
+        assert!(match_test("ab", "ab"));
+        assert!(!match_test("ab", "abc"));
+        assert!(!match_test("abc", "ab"));
+        assert!(!match_test("xyz", "abc"));
+        assert!(!match_test("abc", "xabc"));
+    }
+
+    #[test]
+    fn test_kleene_match() {
+        assert!(match_test("a*", ""));
+        assert!(match_test("a*", "a"));
+        assert!(match_test("a*", "aa"));
+    }
+
+    #[test]
+    fn test_alternation_match() {
+        assert!(match_test("a|b", "a"));
+        assert!(match_test("a|b", "b"));
+        assert!(!match_test("a|b", "c"));
+    }
+
+    #[test]
+    fn test_double_kleene() {
+        assert!(match_test("a*b*", "bbbb"));
+        assert!(match_test("a*b*", "abbb"));
+        assert!(match_test("a*b*", "aabb"));
+        assert!(match_test("a*b*", "aaab"));
+        assert!(match_test("a*b*", "aaaa"));
+    }
+
+    #[test]
+    fn test_kleene_alternation() {
+        assert!(match_test("(ab)*", "ababab"));
+        assert!(!match_test("(ab)*", "ababa"));
+        assert!(match_test("(a*b*)*", "abaaababbb"));
+    }
 }

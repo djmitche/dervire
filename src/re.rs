@@ -80,9 +80,11 @@ impl Re {
 // Parsing using regex-syntax for standard regex patterns
 impl Re {
     /// Parse standard regex syntax using regex-syntax crate
-    pub fn parse_regex(pattern: impl AsRef<str>) -> Result<Rc<Self>, regex_syntax::Error> {
-        let hir = regex_syntax::parse(pattern.as_ref())?;
-        Ok(Self::from_hir(&hir))
+    pub fn parse(pattern: impl AsRef<str>) -> Rc<Self> {
+        let hir = regex_syntax::parse(pattern.as_ref()).unwrap_or_else(|e| {
+            panic!("Invalid regular expression {}: {}", pattern.as_ref(), e)
+        });
+        Self::from_hir(&hir)
     }
 
     /// Convert regex-syntax HIR to our internal Re representation
@@ -112,9 +114,29 @@ impl Re {
                 }
             }
             HirKind::Class(class) => {
-                // For character classes, this is a simplification
-                // In a real implementation, you'd want to handle all the ranges properly
-                Re::char('_') // Placeholder for any character class
+                // Convert character class to alternation
+                use regex_syntax::hir::Class;
+                match class {
+                    Class::Unicode(unicode_class) => {
+                        let chars: Vec<Rc<Re>> = unicode_class.iter()
+                            .flat_map(|range| {
+                                (range.start()..=range.end()).map(Re::char)
+                            })
+                            .collect();
+                        
+                        if chars.is_empty() {
+                            Re::null()
+                        } else if chars.len() == 1 {
+                            chars.into_iter().next().unwrap()
+                        } else {
+                            chars.into_iter().reduce(Re::or).unwrap_or_else(Re::null)
+                        }
+                    }
+                    Class::Bytes(_) => {
+                        // For byte classes, use a placeholder
+                        Re::char('_')
+                    }
+                }
             }
             HirKind::Look(_) => {
                 // Look-around assertions - simplified to empty for this demo
@@ -154,155 +176,6 @@ impl Re {
                         .reduce(Re::or)
                         .unwrap_or_else(Re::null)
                 }
-            }
-        }
-    }
-}
-
-// Custom parsing for the specific grammar used in the original code
-// This maintains the same syntax: concatenation, !, *, +, &, (, ), literals
-impl Re {
-    pub fn parse(s: impl AsRef<str>) -> Rc<Self> {
-        let input = s.as_ref();
-        match Self::parse_expr(input, 0) {
-            Ok((remaining, re)) if remaining.trim().is_empty() => re,
-            _ => panic!("Invalid regular expression {input:?}"),
-        }
-    }
-
-    fn parse_expr(input: &str, pos: usize) -> Result<(&str, Rc<Self>), String> {
-        Self::parse_concat(input, pos)
-    }
-
-    fn parse_concat(input: &str, mut pos: usize) -> Result<(&str, Rc<Self>), String> {
-        let mut result = Re::empty();
-        
-        while pos < input.len() {
-            let remaining = &input[pos..];
-            
-            // Skip whitespace
-            if remaining.starts_with(' ') || remaining.starts_with('\t') || remaining.starts_with('\n') {
-                pos += 1;
-                continue;
-            }
-            
-            // Check for end of current level
-            if remaining.starts_with(')') || remaining.starts_with('+') {
-                break;
-            }
-            
-            let (new_remaining, sub_re) = Self::parse_neg(remaining)?;
-            pos = input.len() - new_remaining.len();
-            
-            if result.is_empty() {
-                result = sub_re;
-            } else {
-                result = Re::concat(result, sub_re);
-            }
-        }
-        
-        Ok((&input[pos..], result))
-    }
-
-    fn parse_neg(input: &str) -> Result<(&str, Rc<Self>), String> {
-        let input = input.trim_start();
-        if input.starts_with('!') {
-            let (remaining, sub_re) = Self::parse_neg(&input[1..])?;
-            Ok((remaining, Re::neg(sub_re)))
-        } else {
-            Self::parse_kleene(input)
-        }
-    }
-
-    fn parse_kleene(input: &str) -> Result<(&str, Rc<Self>), String> {
-        let (mut remaining, mut result) = Self::parse_or(input)?;
-        
-        while remaining.trim_start().starts_with('*') {
-            remaining = remaining.trim_start();
-            remaining = &remaining[1..]; // consume '*'
-            result = Re::kleene(result);
-        }
-        
-        Ok((remaining, result))
-    }
-
-    fn parse_or(input: &str) -> Result<(&str, Rc<Self>), String> {
-        let (mut remaining, mut result) = Self::parse_and(input)?;
-        
-        while remaining.trim_start().starts_with('+') {
-            remaining = remaining.trim_start();
-            if remaining.starts_with('+') && !remaining.starts_with("++") {
-                remaining = &remaining[1..]; // consume '+'
-                let (new_remaining, rhs) = Self::parse_and(remaining)?;
-                remaining = new_remaining;
-                result = Re::or(result, rhs);
-            } else {
-                break;
-            }
-        }
-        
-        Ok((remaining, result))
-    }
-
-    fn parse_and(input: &str) -> Result<(&str, Rc<Self>), String> {
-        let (mut remaining, mut result) = Self::parse_atom(input)?;
-        
-        while remaining.trim_start().starts_with('&') {
-            remaining = remaining.trim_start();
-            remaining = &remaining[1..]; // consume '&'
-            let (new_remaining, rhs) = Self::parse_atom(remaining)?;
-            remaining = new_remaining;
-            result = Re::and(result, rhs);
-        }
-        
-        Ok((remaining, result))
-    }
-
-    fn parse_atom(input: &str) -> Result<(&str, Rc<Self>), String> {
-        let input = input.trim_start();
-        
-        if input.is_empty() {
-            return Ok((input, Re::empty()));
-        }
-        
-        if input.starts_with('(') {
-            let mut paren_count = 0;
-            let mut end_pos = 0;
-            
-            for (i, ch) in input.char_indices() {
-                match ch {
-                    '(' => paren_count += 1,
-                    ')' => {
-                        paren_count -= 1;
-                        if paren_count == 0 {
-                            end_pos = i;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            
-            if paren_count != 0 {
-                return Err("Unmatched parentheses".to_string());
-            }
-            
-            let inner = &input[1..end_pos];
-            let (_, result) = Self::parse_expr(inner, 0)?;
-            Ok((&input[end_pos + 1..], result))
-        } else {
-            // Parse literal character
-            let mut chars = input.chars();
-            if let Some(ch) = chars.next() {
-                match ch {
-                    // Reserved characters that should not be parsed as literals
-                    '!' | '*' | '+' | '&' | '(' | ')' => {
-                        Err(format!("Unexpected character: {}", ch))
-                    }
-                    _ => Ok((chars.as_str(), Re::char(ch)))
-                }
-            } else {
-                Ok((input, Re::empty()))
             }
         }
     }
@@ -496,85 +369,43 @@ impl Re {
 mod test {
     use super::*;
 
-    // Test the new regex-syntax based parser
+    // Test regex-syntax based parser
     #[test]
-    fn test_regex_syntax_parsing() {
-        // Note: This is a demonstration of how regex-syntax could be integrated
-        // The HIR->Re conversion is simplified and not complete
-        
+    fn test_regex_parsing() {
         // Test simple literal
-        let re = Re::parse_regex("a").unwrap();
-        println!("Parsed 'a' as: {:?}", re);
+        let re = Re::parse("a");
         assert!(re.matches_slow("a"));
         assert!(!re.matches_slow("b"));
 
         // Test concatenation  
-        let re = Re::parse_regex("ab").unwrap();
-        println!("Parsed 'ab' as: {:?}", re);
+        let re = Re::parse("ab");
         assert!(re.matches_slow("ab"));
         assert!(!re.matches_slow("a"));
 
-        // TODO: Full HIR->Re conversion for complex patterns like alternation, character classes, etc.
-        // would require more sophisticated translation logic
+        // Test alternation
+        let re = Re::parse("a|b");
+        assert!(re.matches_slow("a"));
+        assert!(re.matches_slow("b"));
+        assert!(!re.matches_slow("c"));
+
+        // Test Kleene star
+        let re = Re::parse("a*");
+        assert!(re.matches_slow(""));
+        assert!(re.matches_slow("a"));
+        assert!(re.matches_slow("aa"));
+
+        // Test plus (one or more)
+        let re = Re::parse("a+");
+        assert!(!re.matches_slow(""));
+        assert!(re.matches_slow("a"));
+        assert!(re.matches_slow("aa"));
+
+        // Test question mark (zero or one)
+        let re = Re::parse("a?");
+        assert!(re.matches_slow(""));
+        assert!(re.matches_slow("a"));
+        assert!(!re.matches_slow("aa"));
     }
-
-    // Parsing
-
-    macro_rules! parse_test {
-        ( $name:ident ( $input:expr ), $re:expr ) => {
-            #[test]
-            fn $name() {
-                assert_eq!(Re::parse($input), $re);
-            }
-        };
-    }
-
-    parse_test!(parse_empty(""), Re::empty());
-    parse_test!(parse_char("a"), Re::char('a'));
-    parse_test!(parse_concat("ab"), Re::concat(Re::char('a'), Re::char('b')));
-    parse_test!(parse_neg_char("!a"), Re::neg(Re::char('a')));
-    parse_test!(
-        parse_neg_char_kleen("!a*"),
-        Re::neg(Re::kleene(Re::char('a')))
-    );
-    parse_test!(
-        parse_triple_kleen("a***"),
-        Re::kleene(Re::kleene(Re::kleene(Re::char('a'))))
-    );
-    parse_test!(
-        parse_triple_neg("!!!a"),
-        Re::neg(Re::neg(Re::neg(Re::char('a'))))
-    );
-    parse_test!(
-        parse_neg_char_concat("!ab"),
-        Re::concat(Re::neg(Re::char('a')), Re::char('b'))
-    );
-    parse_test!(
-        parse_or("a+b+c"),
-        Re::or(Re::or(Re::char('a'), Re::char('b')), Re::char('c'))
-    );
-
-    parse_test!(
-        parse_and_or("a+b&c+d"),
-        Re::or(
-            Re::or(Re::char('a'), Re::and(Re::char('b'), Re::char('c'))),
-            Re::char('d')
-        )
-    );
-    parse_test!(
-        parse_parens("(a+b)&(c+d)"),
-        Re::and(
-            Re::or(Re::char('a'), Re::char('b')),
-            Re::or(Re::char('c'), Re::char('d')),
-        )
-    );
-    parse_test!(
-        parse_parens_kleene("(abc)*"),
-        Re::kleene(Re::concat(
-            Re::concat(Re::char('a'), Re::char('b')),
-            Re::char('c')
-        ))
-    );
 
     // Derivatives
 
@@ -799,10 +630,45 @@ mod test {
         Re::char('a')
     ));
 
-    // Matching
-
+    // Matching - Updated to use standard regex syntax
     fn match_test(re: &str, input: &str) -> bool {
         dbg!(Re::parse(re)).matches_slow(input)
     }
-    crate::test_macros::match_tests!(match_test);
+    
+    // Custom match tests for standard regex syntax
+    #[test]
+    fn test_empty_match() {
+        assert!(match_test("", ""));
+        assert!(!match_test("", "abc"));
+    }
+
+    #[test]
+    fn test_char_match() {
+        assert!(match_test("a", "a"));
+        assert!(!match_test("x", "a"));
+        assert!(!match_test("a", ""));
+    }
+
+    #[test]
+    fn test_concat_match() {
+        assert!(match_test("ab", "ab"));
+        assert!(!match_test("ab", "abc"));
+        assert!(!match_test("abc", "ab"));
+        assert!(!match_test("xyz", "abc"));
+        assert!(!match_test("abc", "xabc"));
+    }
+
+    #[test]
+    fn test_kleene_match() {
+        assert!(match_test("a*", ""));
+        assert!(match_test("a*", "a"));
+        assert!(match_test("a*", "aa"));
+    }
+
+    #[test]
+    fn test_alternation_match() {
+        assert!(match_test("a|b", "a"));
+        assert!(match_test("a|b", "b"));
+        assert!(!match_test("a|b", "c"));
+    }
 }
