@@ -101,7 +101,10 @@ mod test {
         recog.matches(input)
     }
 
-    // Custom match tests for standard regex syntax
+    // Use the comprehensive test suite from test_macros
+    crate::test_macros::match_tests!(match_test);
+
+    // Additional custom match tests for standard regex syntax
     #[test]
     fn test_empty_match() {
         assert!(match_test("", ""));

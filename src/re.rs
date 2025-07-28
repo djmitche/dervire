@@ -407,6 +407,48 @@ mod test {
         assert!(!re.matches_slow("aa"));
     }
 
+    // Parsing tests for standard regex syntax
+    macro_rules! parse_test {
+        ( $name:ident ( $input:expr ), $re:expr ) => {
+            #[test]
+            fn $name() {
+                assert_eq!(Re::parse($input), $re);
+            }
+        };
+    }
+
+    parse_test!(parse_empty(""), Re::empty());
+    parse_test!(parse_char("a"), Re::char('a'));
+    parse_test!(parse_concat("ab"), Re::concat(Re::char('a'), Re::char('b')));
+    parse_test!(parse_alternation("a|b"), Re::or(Re::char('a'), Re::char('b')));
+    parse_test!(
+        parse_kleene_star("a*"),
+        Re::kleene(Re::char('a'))
+    );
+    parse_test!(
+        parse_plus("a+"),
+        Re::concat(Re::char('a'), Re::kleene(Re::char('a')))
+    );
+    parse_test!(
+        parse_question("a?"),
+        Re::or(Re::empty(), Re::char('a'))
+    );
+    parse_test!(
+        parse_parens_alternation("(a|b)"),
+        Re::or(Re::char('a'), Re::char('b'))
+    );
+    parse_test!(
+        parse_parens_kleene("(ab)*"),
+        Re::kleene(Re::concat(Re::char('a'), Re::char('b')))
+    );
+    parse_test!(
+        parse_complex("(a|b)*c"),
+        Re::concat(
+            Re::kleene(Re::or(Re::char('a'), Re::char('b'))),
+            Re::char('c')
+        )
+    );
+
     // Derivatives
 
     macro_rules! deriv_test {
@@ -635,7 +677,10 @@ mod test {
         dbg!(Re::parse(re)).matches_slow(input)
     }
     
-    // Custom match tests for standard regex syntax
+    // Use the comprehensive test suite from test_macros
+    crate::test_macros::match_tests!(match_test);
+    
+    // Additional custom match tests for standard regex syntax
     #[test]
     fn test_empty_match() {
         assert!(match_test("", ""));
