@@ -1,10 +1,10 @@
 [package]
 name = "dervire"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
-nom = "8.0.0"
+regex-syntax = "0.8"
 
 [[bin]]
 name = "recognizer"
