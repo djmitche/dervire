@@ -15,7 +15,6 @@ jobs:
       attestations: read
       checks: read
       deployments: read
-      id-token: write|none
       issues: read
       models: read
       discussions: read
