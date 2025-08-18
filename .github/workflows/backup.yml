@@ -9,6 +9,9 @@ jobs:
   repo-metadata:
     runs-on: ubuntu-latest
     name: "Repo Metadata"
+    permissions:
+      contents: write
+      issues: read
 
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +27,9 @@ jobs:
       - name: "Run backup-github-repo"
         run: backup-github-repo
 
-      - name: "Show Off the Results"
-        run: find repo-backup
-
+      - name: "Push the results"
+        run: |
+          git config --global user.name 'Backup Job'
+          git config --global user.email 'taskwarrior@noreply.github.com'
+          git commit -am "Update Repo Backup"
+          git push
