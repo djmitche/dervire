@@ -46,4 +46,6 @@ jobs:
           git config --global user.email 'taskwarrior@noreply.github.com'
           git add repo-backup
           git commit -am "Update Repo Backup"
+          git status
+          echo $?
           git push
