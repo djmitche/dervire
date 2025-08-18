@@ -31,7 +31,9 @@ jobs:
         run: npm install -g backup-github-repo
 
       - name: "Configure backup-github-repo"
-        run: echo "{\"token\":\"${GH_TOKEN}\"}" > .backup-github-repo
+        run: |
+          echo "{\"token\":\"${GH_TOKEN}\"}" > .backup-github-repo
+          echo 	.backup-github-repo >> .git/info/exclude
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -42,5 +44,6 @@ jobs:
         run: |
           git config --global user.name 'Backup Job'
           git config --global user.email 'taskwarrior@noreply.github.com'
+          git add repo-backup
           git commit -am "Update Repo Backup"
           git push
