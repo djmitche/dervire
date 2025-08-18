@@ -1,0 +1,29 @@
+name: backup
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  repo-metadata:
+    runs-on: ubuntu-latest
+    name: "Repo Metadata"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install backup-github-repo"
+        run: npm install -g backup-github-repo
+
+      - name: "Configure backup-github-repo"
+        run: echo "{\"token\":\"${GH_TOKEN}\"}" > .backup-github-repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Run backup-github-repo"
+        run: backup-github-repo
+
+      - name: "Show Off the Results"
+        run: find repo-backup
+
