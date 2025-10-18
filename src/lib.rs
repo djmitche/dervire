@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_variables)]
 
-// Macro definitions first!
+// Macro definitions must com first!
 #[cfg(test)]
 mod test_macros;
 
